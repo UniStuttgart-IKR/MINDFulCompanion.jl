@@ -11,7 +11,7 @@ function mlnodegraphtomlgraph(ngr::NestedGraph)
     mlg = NestedGraph([AttributeGraph(MultiDiGraph(); vvertex_type=Tuple{NodeType,Int}, edge_type=LinkCostVector), AttributeGraph(MultiDiGraph(); vvertex_type=Tuple{NodeType,Int},edge_type=LinkCostVector)])
     for v in vertices(ngr)
         if MG.has_prop(ngr, v, :mlnode)
-            mlnode = get_prop(ngr, v, :mlnode)
+            mlnode = MINDF.getmlnode(ngr, v)
             # oxc
             addvertex!(mlg; subgraphs=1)[end]
             oxcnode = mlg.vmap[end]
@@ -40,7 +40,7 @@ function mlnodegraphtomlgraph(ngr::NestedGraph)
     for e in edges(ngr)
         ne = NestedEdge((1,e.src), (1,e.dst))
         addedge!(mlg, ne)
-        fv = getfiberview(ngr, e.src, e.dst)
+        fv = MINDF.getlink(ngr, e.src, e.dst)
         lcv = LinkCostVector(Val(opticallink), MINDF.getdistance(fv), MINDF.getspectrumslots(fv), edge(mlg, ne))
         addedgeattr!(mlg, edge(mlg,ne), lcv)
     end
@@ -87,9 +87,8 @@ function mlnodegraphtomlgraph(ibn::IBN, rate::Real)
 end
 
 "$(TYPEDSIGNATURES) Return multilayer nodes in Vector{Vector{Int}} format. Used for plotting"
-function getmlgmlnodes(mlg)
+function getmultilayernodegroups(mlg)
     initializeupuntil(mlns, v) = v > length(mlns) && push!(mlns, fill(Int[], v-length(mlns))...)
-
     mlnodes = Vector{Vector{Int}}()
     for (i,c) in enumerate(getfield.(vertex_attr(mlg),2))
         initializeupuntil(mlnodes, c)
@@ -130,7 +129,7 @@ function getintentnodedescendant(ibn::IBN, idn::IntentDAGNode, typeget::Type{R})
     first(wantedintentnodes)
 end
 
-getmlnode(mlg, v, nodetype=oxcnodetype) = findfirst(x -> x[1] == nodetype && x[2] == v, vertex_attr(mlg))
+getmlgnode(mlg, v, nodetype=oxcnodetype) = findfirst(x -> x[1] == nodetype && x[2] == v, vertex_attr(mlg))
 
 function getlightpathusedrate(dag, lpidagn)
     pars = MINDF.parents(dag, lpidagn)
@@ -146,12 +145,12 @@ end
 function getmlgsrc(ibn, mlg, source, constraints)
     bic = MINDF.getfirst(c -> c isa MINDF.BorderInitiateConstraint, constraints)
     if isnothing(bic)
-        (getmlnode(mlg, source, routernodetype), nothing)
+        (getmlgnode(mlg, source, routernodetype), nothing)
     else
         # todo: grooming initiate border intent
         edg = Edge(MINDF.localnode(ibn, src(bic.edg); subnetwork_view=false), MINDF.localnode(ibn, dst(bic.edg); subnetwork_view=false))
         edgspslots = MINDF.getspectrumslots(MINDF.getlink(ibn, edg))
-        mlgedge = Edge(getmlnode(mlg, src(edg), oxcnodetype), getmlnode(mlg, dst(edg), oxcnodetype))
+        mlgedge = Edge(getmlgnode(mlg, src(edg), oxcnodetype), getmlgnode(mlg, dst(edg), oxcnodetype))
 
         initialedg = searchforavailablelightpath(mlg, mlgedge, MINDF.getreqs(bic))
         if isnothing(initialedg) 
@@ -159,7 +158,7 @@ function getmlgsrc(ibn, mlg, source, constraints)
         else # otherwise point to the appropriate lightpath
             pcv = PathCostVector(mlg, initialedg)
         end
-        (findfirst(x -> x[1] == IBNSims.oxcnodetype && x[2] == source, vertex_attr(mlg)), pcv)
+        (findfirst(x -> x[1] == oxcnodetype && x[2] == source, vertex_attr(mlg)), pcv)
     end
 end
 
@@ -182,43 +181,47 @@ end
 function getmlgdst(mlg, dest, constraints)
     bic = MINDF.getfirst(c -> c isa MINDF.BorderTerminateConstraint, constraints)
     if isnothing(bic)
-        getmlnode(mlg, dest, routernodetype)
+        getmlgnode(mlg, dest, routernodetype)
     else
-        getmlnode(mlg, dest, oxcnodetype)
+        getmlgnode(mlg, dest, oxcnodetype)
     end
 end
 
-getgothroughsmlg(mlg, conint::ConnectivityIntent) = getgothroughsmlg(mlg, getconstraints(conint))
-function getgothroughsmlg(mlg, constraints)
+function getbordernodesmlg(ibn, mlg)
+    [getmlgnode(mlg, bd, oxcnodetype) for bd in MINDF.bordernodes(ibn; subnetwork_view=false)]
+end
+
+getgothroughsmlg(ibn, mlg, conint::ConnectivityIntent) = getgothroughsmlg(ibn, mlg, getconstraints(conint))
+function getgothroughsmlg(ibn, mlg, constraints)
     gothroughs = Vector{Int}()
     notgothroughs = Vector{Int}()
      for gtc in filter(c -> c isa GoThroughConstraint, constraints)
+         getid(ibn) == getnode(gtc)[1] || continue
          if MINDF.getreqlayer(gtc) == MINDF.signalElectrical
              # must go through router
-             push!(gothroughs ,findfirst(x -> x[1] == IBNSims.routernodetype && x[2] == getnode(gtc), vertex_attr(mlg)))
+             push!(gothroughs, getmlgnode(mlg, getnode(gtc)[2], routernodetype))
          elseif MINDF.getreqlayer(gtc) == MINDF.signalUknown
              # must go through OXC (always does)
-             push!(gothroughs ,findfirst(x -> x[1] == IBNSims.oxcnode && x[2] == getnode(gtc), vertex_attr(mlg)))
+             push!(gothroughs, getmlgnode(mlg, getnode(gtc)[2], oxcnodetype))
          elseif MINDF.getreqlayer(gtc) == MINDF.signalOXCbypass
              # must NOT go through router
-             push!(gothroughs ,findfirst(x -> x[1] == IBNSims.oxcnode && x[2] == getnode(gtc), vertex_attr(mlg)))
-             push!(notgothroughs ,findfirst(x -> x[1] == IBNSims.routernodetype && x[2] == getnode(gtc), vertex_attr(mlg)))
+             push!(gothroughs, getmlgnode(mlg, getnode(gtc)[2], oxcnodetype))
+             push!(notgothroughs, getmlgnode(mlg, getnode(gtc)[2], routernodetype))
          end
      end
      return (gothroughs, notgothroughs)
 end
 
-# todo optimize
 """
 $(TYPEDSIGNATURES) 
 
 `source` and `dest` must be a router for now.
 (In MD case this should not be a restriction)
 """
-function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate::Float64; gothrough=Int[], notgothrough=Int[], initiate_pathcost=nothing)
+function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate::Float64; gothrough=Int[], notgothrough=Int[], initiate_pathcost=nothing, bordernodes=Int[])
     Mf = Vector{PathCostVector}()
     M = Vector{PathCostVector}()
-
+    
     # initialize M
     if !isnothing(initiate_pathcost)
         source = dst(initiate_pathcost.path[end])
@@ -236,8 +239,6 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
 
         push!(M, pc)
     end
-#    !isnothing(initiate_pathcost) && @show M
-
     
     while length(M) > 0
         p = first(M)
@@ -273,6 +274,7 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
         for ed in Iterators.filter( e -> validnewedgesfun(mlg, e, n, p), asmultiedges(edges(mlg)))
             dst(ed) in notgothrough && continue
             src(ed) == dest && continue
+            dst(ed) in bordernodes && dst(ed) != dest && continue
             pj_new = add(p, mlg, ed)
 
 
@@ -280,7 +282,7 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
             # discard Vpj if odesn follow reqs
             longestblock = MINDF.longestconsecutiveblock(==(1), pj_new.spectrum)
             getedgeattr(mlg, Tuple(ed)...).linktype in [opticaltovirtuallink, virtuallink] || 
-            any(tm -> getrate(tm) >= rate &&  longestblock > getfreqslots(tm), pj_new.transmods) || continue
+            any(tm -> getrate(tm) >= rate &&  longestblock >= getfreqslots(tm), pj_new.transmods) || continue
 
             # check dominance and add if dominance or go back to another outgoing edge
             breakncontinue = false
@@ -344,13 +346,29 @@ function validnewedgesfun(mlg, e,n,p)
 end
 
 "$(TYPEDSIGNATURES) Pick path out of candidate paths. Current implementation picks the one with lower cost"
-function optimizenondominatedpaths(ibn, mlg, vpcs::Vector{<:PathCostVector})
+function legacyoptimize(ibn, mlg, vpcs::Vector{<:PathCostVector})
     getcostnow(x) = x.costip + x.costopt
     getratenow(x) = sum(getrate.(x.chosentransmodls)) 
-    getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], IBNSims.pathify(x.phypath)),2)) )
+    getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
 
-#    minind = findmin(vpc -> (+getcostnow(vpc), +vpc.virtuallinks, -getratenow(vpc), +getdistnow(vpc)), vpcs)[2]
+    minind = findmin(vpc -> (+getcostnow(vpc), +vpc.virtuallinks, -getratenow(vpc), +getdistnow(vpc)), vpcs)[2]
+    return vpcs[minind]
+end
+
+"$(TYPEDSIGNATURES) Pick path out of candidate paths. Current implementation picks the one with lower cost"
+function maximizevirtuallinks(ibn, mlg, vpcs::Vector{<:PathCostVector})
+    getcostnow(x) = x.costip + x.costopt
+    getratenow(x) = sum(getrate.(x.chosentransmodls)) 
+    getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
+
     minind = findmin(vpc -> (-vpc.virtuallinks, +getcostnow(vpc), -getratenow(vpc), +getdistnow(vpc)), vpcs)[2]
     return vpcs[minind]
 end
 
+
+"$(TYPEDSIGNATURES) Pick path out of diverse source-destination paths"
+function optimizediversepaths(ibn, mlg, vpcs::Vector{<:PathCostVector})
+    getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
+    minind = findmin(vpc -> (+getdistnow(vpc)), vpcs)[2]
+    vpcs[minind]
+end

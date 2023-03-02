@@ -11,5 +11,7 @@ using DocStringExtensions
 const MINDF = MINDFul
 
 include("CompilationAlgorithms/compilationalgorithms.jl")
+include("utils.jl")
+include("defaultbehavior.jl")
 
 end

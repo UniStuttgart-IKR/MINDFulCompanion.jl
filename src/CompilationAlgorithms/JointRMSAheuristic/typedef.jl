@@ -188,27 +188,6 @@ function finalizepathcostvec!(pcv::PathCostVector)
     end
 end
 
-function maximumdominatingpath(pcvs)
-    # prioritize cost
-    mincost = minimum(getcost, pcvs)
-    mincostpred(x) = getcost(x) == mincost
-    remaininds = findall(mincostpred, pcvs)
-
-    length(remaininds) == 1 && return remaininds[1]
-
-    # then virtual links
-    remaining = pcvs[remaininds]
-    minvirtuallinks = minimum(getvirtuallinks, remaining) 
-    minvirtuallinkspred(x) = getvirtuallinks(x) == minvirtuallinks
-    remaininds = findall(x -> mincostpred(x) && minvirtuallinkspred(x), pcvs)
-
-    length(remaininds) == 1 && return remaininds[1]
-
-    # then...
-    return remaininds[1]
-end
-
-
 """
 $(TYPEDSIGNATURES)
 
@@ -219,13 +198,11 @@ function isdominating(pcv1::PathCostVector, pcv2::PathCostVector; gothrough=Int[
     startend(pcv1) == startend(pcv2) || error("`pcv1` and `pcv2` must have the same end nodes")
 
     if !isempty(gothrough) 
-        if all(gothrough .∈ [pcv1.phypath])
-            all(gothrough .∈ [pcv2.phypath]) || return true
-        else #if constraint is not achieved cannot exclude any path that might lead into satisfying the constraint
-            return false 
-        end
+        gothroughflags1 = gothrough .∈ [pathify(pcv1.phypath)]
+        gothroughflags2 = gothrough .∈ [pathify(pcv2.phypath)]
+        all(gothroughflags1) && !all(gothroughflags2) && return true
+        !all(gothroughflags1 .== gothroughflags2) && return false
     end
-
     # go here only if both paths gothrough the needed nodes or `gothrough` are empty
 
     (pcv1.length < pcv2.length && 

@@ -1,18 +1,18 @@
-function jointrmsagenerilizeddijkstra!(ibn::IBN, idagnode::IntentDAGNode{R}, ::MINDF.IntraIntent; time) where R<:ConnectivityIntent
-    # implement (Not)GoThroughConstraints
+function jointrmsagenerilizeddijkstra!(ibn::IBN, idagnode::IntentDAGNode{R}, ::MINDF.IntraIntent; optimizepaths=legacyoptimize,time) where R<:ConnectivityIntent
     conint = getintent(idagnode)
 
-    mlg = IBNSims.mlnodegraphtomlgraph(ibn, getrate(conint))
+
+    mlg = mlnodegraphtomlgraph(ibn, getrate(conint))
 
     sourcemlg, initiate_mlg = getmlgsrc(ibn, mlg, conint)
     destmlg = getmlgdst(ibn, mlg, conint)
-    gothroughmlg, notgothroughmlg = getgothroughsmlg(mlg, conint)
+    gothroughmlg, notgothroughmlg = getgothroughsmlg(ibn, mlg, conint)
+    bordernodesmlg = getbordernodesmlg(ibn, mlg)
 
-    mfc = IBNSims.computenondominatedpaths(mlg, sourcemlg, destmlg, getrate(conint); 
-                                           gothrough=gothroughmlg, notgothrough=notgothroughmlg, initiate_pathcost=initiate_mlg)
+    mfc = computenondominatedpaths(mlg, sourcemlg, destmlg, getrate(conint); 
+                   gothrough=gothroughmlg, notgothrough=notgothroughmlg, initiate_pathcost=initiate_mlg, bordernodes=bordernodesmlg)
 
-#    !isnothing(initiate_mlg) && @show(mfc)
-    mfc1 = optimizenondominatedpaths(ibn, mlg, mfc)
+    mfc1 = optimizepaths(ibn, mlg, mfc)
 
     groomedenableddagexpansion!(ibn, idagnode, mlg, mfc1; time)
     return MINDF.getstate(idagnode)
@@ -25,43 +25,16 @@ function groomedenableddagexpansion!(ibn::IBN, idagnode::IntentDAGNode{R}, mlg, 
     for (lp,uuid,lptype) in zip(lps,uuids,lightpathtypes)
         if !ismissing(uuid)
             add_edge!(dag, getid(idagnode), uuid, nothing)
+            MINDF.try2setstate!(idagnode, ibn, Val(MINDF.compiled); time)
             continue
         end
         i += 1
         lpu = unique(getindex.(getvertexattr.([mlg], lp), 2))
-        lpint = MINDF.getcompliantintent(ibn, getintent(idagnode), LightpathIntent, lpu, mfc1.chosentransmodls[i], lptype)
-        isnothing(lpint) && error("Could not create a LightpathIntent")
-        # needed mostly for fault detection, since ports and transponders are infinite
-        MINDF.isavailable(ibn, lpint) || error("intent resources are not available")
-        lpintnode = addchild!(dag, idagnode.id, lpint)
-        for lli in MINDF.lowlevelintents(lpintnode.intent)
-            addchild!(dag, lpintnode.id, lli)
-        end
+        lpintnode = MINDF.compile!(ibn, idagnode, LightpathIntent, lpu, mfc1.chosentransmodls[i], lptype)
+        getstate(lpintnode) ∈ [MINDF.compiled, MINDF.installed, MINDF.installfailed] && continue
 
-        # spectrum allocation
-        if lptype in [MINDF.borderinitiatelightpath, MINDF.border2borderlightpath]
-            bicidx = findfirst(c-> c isa MINDF.BorderInitiateConstraint, getconstraints(getintent(lpintnode)))
-            lpr = MINDF.getreqs(getconstraints(getintent(lpintnode))[bicidx])
-            spslots = lpr.spslots
-        else
-            fs = [get_prop(ibn.ngr, e, :link) for e in edgeify(lpintnode.intent.path)]
-            trmdlslots = getfreqslots(lpintnode.intent.transmodl)
-            trmdlrate = getrate(lpintnode.intent.transmodl)
-            startingslot = MINDF.firstfit(fs, trmdlslots)
-            startingslot === nothing && error("Not enough slots for transmission module chosen")
-            spslots = startingslot:startingslot+trmdlslots-1
-        end
-        speint = MINDF.getcompliantintent(ibn, lpintnode.intent, MINDF.SpectrumIntent, lpintnode.intent.path, getrate(getintent(lpintnode)), spslots)
-        speint === nothing && error("Could not create a SpectrumAllocationIntent")
-
-        if speint !== nothing && MINDF.isavailable(ibn, speint)
-            speintnode = addchild!(dag, lpintnode.id, speint)
-            for lli in MINDF.lowlevelintents(speintnode.intent)
-                addchild!(dag, speintnode.id, lli)
-            end
-            MINDF.try2setstate!(speintnode, ibn, Val(MINDF.compiled); time)
-            MINDF.try2setstate!(idagnode, ibn, Val(MINDF.compiled); time)
-        end
+        speintnode = MINDF.compile!(ibn, lpintnode, MINDF.SpectrumIntent, lptype, MINDF.firstfit)
+        MINDF.try2setstate!(speintnode, ibn, Val(MINDF.compiled); time)
     end
 
 end
@@ -73,18 +46,27 @@ function jointrmsagenerilizeddijkstra!(myibn::IBN, neibn::IBN, idagnode::IntentD
     iidforward = R <: MINDF.IntentForward
     conint = getintent(idagnode)
 
+    globalizedbordernodes = filter(gn -> gn[1] == getid(neibn) ,globalnode.([myibn], bordernodes(myibn; subnetwork_view=false)))
+    bordergtc = MINDF.getfirst(gtc -> getnode(gtc) in globalizedbordernodes ,filter(c -> c isa GoThroughConstraint, getconstraints(conint)))
+
     if iidforward
-        if getdst(conint) in globalnode.([myibn], bordernodes(myibn; subnetwork_view=false))
+        if getdst(conint) in globalizedbordernodes
             myintent = ConnectivityIntent(getsrc(conint), getdst(conint), getrate(conint),
+                                          vcat(MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
+        elseif !isnothing(bordergtc)
+            myintent = ConnectivityIntent(getsrc(conint), getnode(bordergtc), getrate(conint),
                                           vcat(MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
         else
             myintent = MINDF.DomainConnectivityIntent(getsrc(conint), getid(neibn), getrate(conint),
                                           vcat(MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
         end
     else
-        if getsrc(conint) in globalnode.([myibn], bordernodes(myibn; subnetwork_view=false))
+        if getsrc(conint) in globalizedbordernodes
             myintent = ConnectivityIntent(getdst(conint), getsrc(conint), getrate(conint),
                           vcat(MINDF.ReverseConstraint(), MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
+        elseif !isnothing(bordergtc)
+            myintent = ConnectivityIntent(getdst(conint), getnode(bordergtc), getrate(conint),
+                                          vcat(MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
         else
             myintent = MINDF.DomainConnectivityIntent(getdst(conint), getid(neibn), getrate(conint),
                                   vcat(MINDF.ReverseConstraint(), MINDF.BorderTerminateConstraint() , getconstraints(conint)), getconditions(conint))
@@ -114,44 +96,31 @@ function jointrmsagenerilizeddijkstra!(myibn::IBN, neibn::IBN, idagnode::IntentD
 end
 
 "$(TYPEDSIGNATURES)"
-function jointrmsagenerilizeddijkstra!(ibn::IBN, idagnode::IntentDAGNode{R}; time) where {R<:MINDF.DomainConnectivityIntent}
+function jointrmsagenerilizeddijkstra!(ibn::IBN, idagnode::IntentDAGNode{R}; optimizepaths=legacyoptimize, time) where {R<:MINDF.DomainConnectivityIntent}
     dag = getintentdag(ibn)
     conint = getintent(idagnode)
 
-    srcdsts = getintrasrcdst(ibn, getintent(idagnode))
+    srcdsts = MINDF.getintrasrcdst(ibn, getintent(idagnode))
     constraints = getconstraints(conint)
 
-    mlg = IBNSims.mlnodegraphtomlgraph(ibn, getrate(conint))
+    mlg = mlnodegraphtomlgraph(ibn, getrate(conint))
 
     mfcfinals = [ let
         sourcemlg, initiate_mlg = getmlgsrc(ibn, mlg, source, constraints)
         destmlg = getmlgdst(mlg, dest, constraints)
-        gothroughmlg, notgothroughmlg = getgothroughsmlg(mlg, constraints)
-        mfc = IBNSims.computenondominatedpaths(mlg, sourcemlg, destmlg, getrate(conint); 
-                                               gothrough=gothroughmlg, notgothrough=notgothroughmlg, initiate_pathcost=initiate_mlg)
-        mfc1 = optimizenondominatedpaths(ibn, mlg, mfc)
+        gothroughmlg, notgothroughmlg = getgothroughsmlg(ibn, mlg, constraints)
+        bordernodesmlg = getbordernodesmlg(ibn, mlg)
+        mfc = computenondominatedpaths(mlg, sourcemlg, destmlg, getrate(conint); 
+                       gothrough=gothroughmlg, notgothrough=notgothroughmlg, initiate_pathcost=initiate_mlg, bordernodes=bordernodesmlg)
+        mfc1 = optimizepaths(ibn, mlg, mfc)
     end for (source,dest) in srcdsts]
 
     # compare between unsimilar endnodes pathcost vectors
-    mfcwinner = first(mfcfinals)
+    mfcwinner = optimizediversepaths(ibn, mlg, mfcfinals)
 
     # find out one single mfc1
     groomedenableddagexpansion!(ibn, idagnode, mlg, mfcwinner; time)
     return getstate(idagnode)
-end
-
-"$(TYPEDSIGNATURES) Return a collection of valid sources and destinations combinations in the intranet"
-function getintrasrcdst(ibn::IBN, intent::MINDF.DomainConnectivityIntent{Tuple{Int,Int}, Int})
-    neibnidx = MINDF.getlocalibnindex(ibn, getdst(intent))
-    dests = MINDF.nodesofcontroller(ibn, neibnidx)
-    [(MINDF.localnode(ibn, MINDF.getsrc(intent); subnetwork_view=false),d) for d in dests]
-end
-
-"$(TYPEDSIGNATURES) Return a collection of valid sources and destinations combinations in the intranet"
-function getintrasrcdst(ibn::IBN, intent::MINDF.DomainConnectivityIntent{Int, Tuple{Int,Int}})
-    neibnidx = MINDF.getlocalibnindex(ibn, getsrc(intent))
-    sours = MINDF.nodesofcontroller(ibn, neibnidx)
-    [(s, MINDF.localnode(ibn, MINDF.getdst(intent); subnetwork_view=false)) for s in sours]
 end
 
 """
