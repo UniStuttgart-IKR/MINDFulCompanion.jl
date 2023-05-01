@@ -123,43 +123,47 @@ function add(pcv::PathCostVector, mlg::NestedGraph, es::AbstractEdge...)
     pcvadd
 end
 
-function add(pcv::PathCostVector, mlg::NestedGraph, e::AbstractEdge)
+function add(pcv::PathCostVector, mlg::NestedGraph, e::AbstractEdge, rate::Float64; minrate=false)
     pcvadd = deepcopy(pcv)
-    add!(pcvadd, mlg, e)
+    add!(pcvadd, mlg, e, rate; minrate)
 end
 
-function add!(pcv::PathCostVector, mlg::NestedGraph, e::AbstractEdge)
+function add!(pcv::PathCostVector, mlg::NestedGraph, e::AbstractEdge, rate::Float64; minrate=false)
     lcv = getedgeattr(mlg, Tuple(e)...)
     if lcv.linktype == opticallink || lcv.linktype == virtuallink
-        addoptvirt!(pcv, lcv)
+        addoptvirt!(pcv, lcv, rate)
     elseif lcv.linktype == virtualtoopticallink
         addvirt2opt!(pcv, lcv)
     elseif lcv.linktype == opticaltovirtuallink
-        addopt2virt!(pcv, lcv)
+        addopt2virt!(pcv, lcv; minrate)
     end
     push!(pcv.path, e)
     push!(pcv.phypath, lcv.phypath...)
     return pcv
 end
 
-function addoptvirt!(pcv::PathCostVector, lcv::LinkCostVector)
+function addoptvirt!(pcv::PathCostVector, lcv::LinkCostVector, rate::Float64)
     pcv.length += lcv.length
     pcv.costopt += lcv.costopt
     pcv.costip += lcv.costip
     pcv.virtuallinks += lcv.isvirtuallink
     pcv.spectrum .&= lcv.spectrum
     filter!(pcv.transmods) do tp
-        getoptreach(tp) >= pcv.length && MINDF.longestconsecutiveblock(==(true), pcv.spectrum) >= getfreqslots(tp)
+        getoptreach(tp) >= pcv.length && MINDF.longestconsecutiveblock(==(true), pcv.spectrum) >= getfreqslots(tp) && getrate(tp) >= rate
     end
 end
-function addopt2virt!(pcv::PathCostVector, lcv::LinkCostVector)
+function addopt2virt!(pcv::PathCostVector, lcv::LinkCostVector; minrate=false)
     pcv.length += lcv.length
     pcv.costopt += lcv.costopt
     pcv.costip += lcv.costip
     pcv.virtuallinks += lcv.isvirtuallink
     if length(pcv.transmods) > 0
-        maxrateind = findmax(tm -> tm.rate, pcv.transmods)[2]
-        chosentransmod = pcv.transmods[maxrateind]
+        if minrate
+            rateind = findmin(tm -> tm.rate, pcv.transmods)[2]
+        else
+            rateind = findmax(tm -> tm.rate, pcv.transmods)[2]
+        end
+        chosentransmod = pcv.transmods[rateind]
         selectedmode = findfirst(==(chosentransmod), MINDF.gettransmissionmodes(pcv.transmodule))
         MINDF.setselection!(pcv.transmodule, selectedmode)
         push!(pcv.chosentransmodls, pcv.transmodule)
@@ -178,10 +182,14 @@ function addvirt2opt!(pcv::PathCostVector, lcv::LinkCostVector)
     pcv.spectrum .= true 
 end
 
-function finalizepathcostvec!(pcv::PathCostVector)
+function finalizepathcostvec!(pcv::PathCostVector; minrate=false)
     if length(pcv.transmods) > 0
-        maxrateind = findmax(tm -> tm.rate, pcv.transmods)[2]
-        chosentransmod = pcv.transmods[maxrateind]
+        if minrate
+            rateind = findmin(tm -> tm.rate, pcv.transmods)[2]
+        else
+            rateind = findmax(tm -> tm.rate, pcv.transmods)[2]
+        end
+        chosentransmod = pcv.transmods[rateind]
         selectedmode = findfirst(==(chosentransmod), MINDF.gettransmissionmodes(pcv.transmodule))
         MINDF.setselection!(pcv.transmodule, selectedmode)
         push!(pcv.chosentransmodls, pcv.transmodule)

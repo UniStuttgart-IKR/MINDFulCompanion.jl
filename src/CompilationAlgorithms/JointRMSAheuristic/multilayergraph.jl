@@ -8,7 +8,7 @@ Return also a data structure to nodes of the new nested graph to the nodes of th
 There are 2 layers in the multi layer graph: PHY, IP
 """
 function mlnodegraphtomlgraph(ngr::NestedGraph)
-    mlg = NestedGraph([AttributeGraph(MultiDiGraph(); vvertex_type=Tuple{NodeType,Int}, edge_type=LinkCostVector), AttributeGraph(MultiDiGraph(); vvertex_type=Tuple{NodeType,Int},edge_type=LinkCostVector)])
+    mlg = NestedGraph([OAttributeGraph(MultiDiGraph(); vertex_type=Tuple{NodeType,Int}, edge_type=LinkCostVector), OAttributeGraph(MultiDiGraph(); vertex_type=Tuple{NodeType,Int},edge_type=LinkCostVector)])
     for v in vertices(ngr)
         if MG.has_prop(ngr, v, :mlnode)
             mlnode = MINDF.getmlnode(ngr, v)
@@ -48,7 +48,7 @@ function mlnodegraphtomlgraph(ngr::NestedGraph)
 end
 
 "$(TYPEDSIGNATURES) Add virtual links and ip cost"
-function mlnodegraphtomlgraph(ibn::IBN, rate::Real)
+function mlnodegraphtomlgraph(ibn::IBN, rate::Real; bordergroomingenabled=true)
     mlg = mlnodegraphtomlgraph(ibn.ngr)
     # get ip port cost
     for ed in asmultiedges(edges(mlg))
@@ -62,6 +62,7 @@ function mlnodegraphtomlgraph(ibn::IBN, rate::Real)
     # do virtual links
     lps, lpuuids, rescap, lptypes, spectrums = findlightpathsNusage(ibn)
     for (lp, lpuuid, resc, lptype, spslots) in zip(lps, lpuuids, rescap, lptypes, spectrums)
+        !bordergroomingenabled && lptype in [MINDF.borderinitiatelightpath, MINDF.borderterminatelightpath ,MINDF.border2borderlightpath] && continue
         if resc >= rate
             if lptype in [MINDF.borderinitiatelightpath, MINDF.border2borderlightpath]
                 mlgvsrc = findfirst( x -> x==(oxcnodetype, lp[1]), vertex_attr(mlg))
@@ -74,10 +75,9 @@ function mlnodegraphtomlgraph(ibn::IBN, rate::Real)
             else
                 mlgvdst = findfirst( x -> x==(routernodetype, lp[end]), vertex_attr(mlg))
             end
-
             mlgvbetween = [findfirst( x -> x==(oxcnodetype, lp[i]), vertex_attr(mlg)) for i in 2:length(lp)-1]
             mlgpath = vcat(mlgvsrc, mlgvbetween, mlgvdst)
-            multipl = multiplicity(AttributeGraphs.graph(mlg.flatgr), mlgvsrc, mlgvdst)
+            multipl = multiplicity(AttributeGraphs.getgraph(mlg.flatgr), mlgvsrc, mlgvdst)
             lc_virtual = LinkCostVector(Val(virtuallink), edgeify(mlgpath), spslots, lpuuid)
             add_edge!(mlg, mlgvsrc, mlgvdst)
             addedgeattr!(mlg, mlgvsrc, mlgvdst, multipl+1, lc_virtual)
@@ -105,11 +105,20 @@ function findlightpathsNusage(ibn::IBN)
     lightpathtypes = Vector{MINDF.LightpathType}()
     spectrums = Vector{UnitRange{Int}}()
     for lpi in filter(x -> getintent(x) isa LightpathIntent, getallintentnodes(ibn))
+        getstate(lpi) == MINDF.installed || continue
         # also add UUID
         if any(c -> c isa MINDF.BorderInitiateConstraint, getconstraints(getintent(lpi)))
-            push!(lightpathtypes, MINDF.borderinitiatelightpath)
+            if any(c -> c isa MINDF.BorderTerminateConstraint, getconstraints(getintent(lpi)))
+                push!(lightpathtypes, MINDF.border2borderlightpath)
+            else
+                push!(lightpathtypes, MINDF.borderinitiatelightpath)
+            end
         elseif any(c -> c isa MINDF.BorderTerminateConstraint, getconstraints(getintent(lpi)))
-            push!(lightpathtypes, MINDF.borderterminatelightpath)
+            if any(c -> c isa MINDF.BorderInitiateConstraint, getconstraints(getintent(lpi)))
+                push!(lightpathtypes, MINDF.border2borderlightpath)
+            else
+                push!(lightpathtypes, MINDF.borderterminatelightpath)
+            end
         else
             push!(lightpathtypes, MINDF.fulllightpath)
         end
@@ -130,19 +139,22 @@ function getintentnodedescendant(ibn::IBN, idn::IntentDAGNode, typeget::Type{R})
 end
 
 getmlgnode(mlg, v, nodetype=oxcnodetype) = findfirst(x -> x[1] == nodetype && x[2] == v, vertex_attr(mlg))
+getflatnode(mlg, v) = getvertexattr(mlg, v)[2]
+getflatedge(mlg, ed) = Edge( getflatnode(mlg, src(ed)), getflatnode(mlg, dst(ed)) )
 
 function getlightpathusedrate(dag, lpidagn)
     pars = MINDF.parents(dag, lpidagn)
     sum([getrate(getintent(par)) for par in pars])
 end
 
-function getmlgsrc(ibn, mlg, conint::ConnectivityIntent)
+function getmlgsrc(ibn, mlg, conint::ConnectivityIntent; iuuid::UUID=UUID(0x0))
     source = MINDF.localnode(ibn, getsrc(conint); subnetwork_view=false)
     constraints = getconstraints(conint)
-    getmlgsrc(ibn, mlg, source, constraints)
+    getmlgsrc(ibn, mlg, source, constraints; iuuid)
 end
 
-function getmlgsrc(ibn, mlg, source, constraints)
+function getmlgsrc(ibn, mlg, source, constraints; iuuid::UUID=UUID(0x0))
+#function getmlgsrc(ibn, mlg, source, constraints)
     bic = MINDF.getfirst(c -> c isa MINDF.BorderInitiateConstraint, constraints)
     if isnothing(bic)
         (getmlgnode(mlg, source, routernodetype), nothing)
@@ -152,7 +164,7 @@ function getmlgsrc(ibn, mlg, source, constraints)
         edgspslots = MINDF.getspectrumslots(MINDF.getlink(ibn, edg))
         mlgedge = Edge(getmlgnode(mlg, src(edg), oxcnodetype), getmlgnode(mlg, dst(edg), oxcnodetype))
 
-        initialedg = searchforavailablelightpath(mlg, mlgedge, MINDF.getreqs(bic))
+        initialedg = searchforavailablelightpath(mlg, mlgedge, MINDF.getreqs(bic); iuuid=(getid(ibn), iuuid))
         if isnothing(initialedg) 
             pcv = PathCostVector(MINDF.getreqs(bic), mlgedge, edgspslots)
         else # otherwise point to the appropriate lightpath
@@ -163,19 +175,31 @@ function getmlgsrc(ibn, mlg, source, constraints)
 end
 
 "$(TYPEDSIGNATURES) Search if there is a lightpath created for `bic`. If yes, return the half-lightpath edge. Else return `nothing`"
-function searchforavailablelightpath(mlg, edg::AbstractEdge, lpr::MINDF.LightpathRequirements)
+function searchforavailablelightpath(mlg, edg::AbstractEdge, lpr::MINDF.LightpathRequirements; iuuid=UUID(0x0))
     edglcvs = filter(edge_attr(mlg)) do (_,lcv)
-        edg in lcv.phypath && all([isequal(i in lpr.spslots, b) for (i,b) in enumerate(lcv.spectrum)])
+#        edg in lcv.phypath && all([isequal(i in lpr.spslots, b) for (i,b) in enumerate(lcv.spectrum)])
+        isequal(lcv.linktype, virtuallink) && mlgedginphypath(mlg, edg, lcv.phypath; iuuid) && all([isequal(i in lpr.spslots, b) for (i,b) in enumerate(lcv.spectrum)])
     end
+
     length(edglcvs) > 1 && @warn("Found more than one appropriate lightpath to map to")
     length(edglcvs) == 0 && return nothing
     return SingleMultiEdge(first(edglcvs)[1])
 end
 
+function mlgedginphypath(mlg, edg, phpath; iuuid=UUID(0x0))
+    fledg = getflatedge(mlg, edg)
+    for phedg in phpath
+        flphedg = getflatedge(mlg, phedg)
+        fledg == flphedg && return true
+    end
+    return false
+end
+
 function getmlgdst(ibn, mlg, conint::ConnectivityIntent)
     dest = MINDF.localnode(ibn, getdst(conint); subnetwork_view=false)
     constraints = getconstraints(conint)
-    getmlgdst(mlg, dest, constraints)
+    res = getmlgdst(mlg, dest, constraints)
+    return res
 end
 
 function getmlgdst(mlg, dest, constraints)
@@ -218,19 +242,26 @@ $(TYPEDSIGNATURES)
 `source` and `dest` must be a router for now.
 (In MD case this should not be a restriction)
 """
-function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate::Float64; gothrough=Int[], notgothrough=Int[], initiate_pathcost=nothing, bordernodes=Int[])
+function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate::Float64; gothrough=Int[], notgothrough=Int[], initiate_pathcost=nothing, bordernodes=Int[], minrate=false, iuuid)
     Mf = Vector{PathCostVector}()
     M = Vector{PathCostVector}()
-    
+
     # initialize M
     if !isnothing(initiate_pathcost)
         source = dst(initiate_pathcost.path[end])
+        if source == dest || source ∈ bordernodes
+            return [initiate_pathcost]
+        end
     end
     for ed in Iterators.filter(e-> src(e)==source , asmultiedges(edges(mlg)))
         dst(ed) in notgothrough && continue
+        dst(ed) in bordernodes && dst(ed) != dest && continue
+#TODO        validnewedgesfun(mlg, ed, source, pc) || continue
         pc = isnothing(initiate_pathcost) ? let lc = getedgeattr(mlg, Tuple(ed)...);
             PathCostVector(lc, ed)
-        end : add(initiate_pathcost, mlg, ed)
+        end : add(initiate_pathcost, mlg, ed, rate; minrate)
+        # do not loop
+        dst(ed) ∈ pathify(pc.path)[1:end-1] && continue
 
         # discard Vpj if odesn follow reqs
         longestblock = MINDF.longestconsecutiveblock(==(1), pc.spectrum)
@@ -239,6 +270,7 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
 
         push!(M, pc)
     end
+
     
     while length(M) > 0
         p = first(M)
@@ -275,9 +307,7 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
             dst(ed) in notgothrough && continue
             src(ed) == dest && continue
             dst(ed) in bordernodes && dst(ed) != dest && continue
-            pj_new = add(p, mlg, ed)
-
-
+            pj_new = add(p, mlg, ed, rate; minrate)
 
             # discard Vpj if odesn follow reqs
             longestblock = MINDF.longestconsecutiveblock(==(1), pj_new.spectrum)
@@ -308,7 +338,7 @@ function computenondominatedpaths(mlg::NestedGraph, source::Int, dest::Int, rate
             breakncontinue && continue
             pj_new in M && error("path already in M")
             if dst(ed) == dest
-                finalizepathcostvec!(pj_new)
+                finalizepathcostvec!(pj_new; minrate)
             end
             push!(M, pj_new)
         end
@@ -333,10 +363,13 @@ function validnewedgesfun(mlg, e,n,p)
     noillegalcycles = let
         finalnode = dst(e) 
         currentpath = pathify(p.path)
+        onelayerpath = unique(getflatnode.([mlg], currentpath))
+#        if getflatnode(mlg, finalnode) ∉ onelayerpath[1:end-1]
         if finalnode ∉ currentpath
             true
         elseif getvertexattr(mlg, finalnode)[1] == oxcnodetype && finalnode == currentpath[end-1] && 
-            getvertexattr(mlg, currentpath[end])[1] == routernodetype && finalnode ∉ currentpath[1:end-2] 
+            getvertexattr(mlg, currentpath[end])[1] == routernodetype && finalnode ∉ currentpath[1:end-2]
+#            getflatnode(mlg, finalnode) == getflatnode(mlg, currentpath[end])
             true
         else
             false
@@ -346,9 +379,9 @@ function validnewedgesfun(mlg, e,n,p)
 end
 
 "$(TYPEDSIGNATURES) Pick path out of candidate paths. Current implementation picks the one with lower cost"
-function legacyoptimize(ibn, mlg, vpcs::Vector{<:PathCostVector})
+function legacyoptimize(ibn, mlg, vpcs::Vector{<:PathCostVector}; iuuid=nothing)
     getcostnow(x) = x.costip + x.costopt
-    getratenow(x) = sum(getrate.(x.chosentransmodls)) 
+    getratenow(x) = sum(getrate.(x.chosentransmodls); init=0.0) 
     getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
 
     minind = findmin(vpc -> (+getcostnow(vpc), +vpc.virtuallinks, -getratenow(vpc), +getdistnow(vpc)), vpcs)[2]
@@ -358,16 +391,26 @@ end
 "$(TYPEDSIGNATURES) Pick path out of candidate paths. Current implementation picks the one with lower cost"
 function maximizevirtuallinks(ibn, mlg, vpcs::Vector{<:PathCostVector})
     getcostnow(x) = x.costip + x.costopt
-    getratenow(x) = sum(getrate.(x.chosentransmodls)) 
+    getratenow(x) = sum(getrate.(x.chosentransmodls); init=0.0) 
     getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
 
     minind = findmin(vpc -> (-vpc.virtuallinks, +getcostnow(vpc), -getratenow(vpc), +getdistnow(vpc)), vpcs)[2]
     return vpcs[minind]
 end
 
+"$(TYPEDSIGNATURES) Pick path out of candidate paths. Current implementation picks the one with lower cost"
+function minlatencyoptimize(ibn, mlg, vpcs::Vector{<:PathCostVector})
+    getcostnow(x) = x.costip + x.costopt
+    getratenow(x) = sum(getrate.(x.chosentransmodls); init=0.0) 
+    getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
+
+    minind = findmin(vpc -> (+getdistnow(vpc), +getcostnow(vpc), +vpc.virtuallinks, -getratenow(vpc)), vpcs)[2]
+    return vpcs[minind]
+end
+
 
 "$(TYPEDSIGNATURES) Pick path out of diverse source-destination paths"
-function optimizediversepaths(ibn, mlg, vpcs::Vector{<:PathCostVector})
+function optimizediversepaths(ibn, mlg, vpcs)
     getdistnow(x) = MINDF.getdistance(ibn, unique(getindex.(getvertexattr.([mlg], pathify(x.phypath)),2)) )
     minind = findmin(vpc -> (+getdistnow(vpc)), vpcs)[2]
     vpcs[minind]
