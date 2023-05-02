@@ -16,6 +16,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 WrappedMultiGraphs = "2815cbbd-0d7d-431b-a8da-1940906b5714"
 
 [compat]
+AttributeGraphs = "0.2"
 DocStringExtensions = "0.9"
 Graphs = "1"
 MINDFul = "0.2"
