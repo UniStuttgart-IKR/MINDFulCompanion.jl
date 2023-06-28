@@ -1,7 +1,7 @@
 
 @testset "jointrmsaheuristic.jl" begin
     globalnet = open(testdir*"/topologies/4nets.graphml") do io
-        loadgraph(io, "global-network", GraphMLFormat(), NestedGraphs.NestedGraphFormat())
+        loadgraph(io, "global-network", GraphIO.GraphML.GraphMLFormat(), NestedGraphs.NestedGraphFormat())
     end
     simgraph = MINDFul.simgraph(globalnet; 
                                 router_lcpool=MINDFC.defaultlinecards(), 
