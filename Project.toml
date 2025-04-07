@@ -8,23 +8,23 @@ AttributeGraphs = "d091dd56-f8c5-469d-b7f7-ff847498145f"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 MINDFul = "437ce7a4-cd80-4539-9a29-b274cfe157d6"
-MetaGraphs = "626554b9-1ddb-594c-aa3c-2596fe9399a5"
-MetaGraphsNext = "fa8bd995-216d-47f1-8a91-f3b68fbeb377"
-NestedGraphs = "03c36417-ddab-428a-818d-5359aee292ef"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
-WrappedMultiGraphs = "2815cbbd-0d7d-431b-a8da-1940906b5714"
+UnitfulData = "479269fd-87c4-43d6-a395-02aad47d928b"
+
+[sources]
+MINDFul = {path = "../MINDFul-rewrite/"}
 
 [compat]
-AttributeGraphs = "0.2, 0.3"
+AttributeGraphs = "0.3"
 DocStringExtensions = "0.9"
-Graphs = "1.8"
-MINDFul = "0.2"
-MetaGraphs = "0.7"
-MetaGraphsNext = "0.5"
-NestedGraphs = "0.1.2, 0.2"
+Graphs = "1"
+MINDFul = "0.3"
+Random = "1.11.0"
+UUIDs = "1"
 Unitful = "1"
-WrappedMultiGraphs = "0.1"
+UnitfulData = "0.6"
 julia = "1"
 
 [extras]

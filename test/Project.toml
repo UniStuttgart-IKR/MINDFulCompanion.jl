@@ -1,10 +1,14 @@
 [deps]
-GraphIO = "aa1b3936-2fda-51b9-ab35-c553d3a640a2"
+AttributeGraphs = "d091dd56-f8c5-469d-b7f7-ff847498145f"
+Cthulhu = "f68482b8-f384-11e8-15f7-abe071a5a75f"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 MINDFul = "437ce7a4-cd80-4539-9a29-b274cfe157d6"
-MINDFulCompanion = "51b1db7e-1a2e-4318-af53-61c13e101964"
-NestedGraphs = "03c36417-ddab-428a-818d-5359aee292ef"
-NestedGraphsIO = "4bcdce80-1129-4e34-b1b9-f101712b434d"
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TestSetExtensions = "98d24dd4-01ad-11ea-1b02-c9a08f80db04"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+UnitfulData = "479269fd-87c4-43d6-a395-02aad47d928b"
+
+[sources]
+MINDFul = {path = "../../MINDFul-rewrite/"}

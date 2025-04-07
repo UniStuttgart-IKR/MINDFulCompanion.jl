@@ -1,17 +1,14 @@
 module MINDFulCompanion
 
-using MINDFul, Unitful, UUIDs
+using Unitful, UnitfulData, UUIDs, DocStringExtensions
+using Graphs
 
-using Graphs, WrappedMultiGraphs, AttributeGraphs, NestedGraphs
-import MetaGraphsNext as MGN
-import MetaGraphs as MG
+import AttributeGraphs as AG
+import MINDFul as MINDF
 
-using DocStringExtensions
+import Random: MersenneTwister, rand
+import MINDFul: IBNFramework, IntentDAGNode, ConnectivityIntent, updateidagnodestates!
 
-const MINDF = MINDFul
-
-include("CompilationAlgorithms/compilationalgorithms.jl")
-include("utils.jl")
-include("defaultbehavior.jl")
+include("randompolicy.jl")
 
 end
