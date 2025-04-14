@@ -11,7 +11,7 @@ struct UniformRandomCompilation <: MINDF.IntentCompilationAlgorithm
     "The starting seed"
     seed::Int
     "The number of candidate paths to choose upon"
-    candidatepaths::Int
+    candidatepathsnum::Int
     "The random generator"
     rng::MersenneTwister
 end
@@ -26,8 +26,8 @@ end
 """
 $(TYPEDSIGNATURES)
 """
-function getcandidatepaths(uniformrandomcompilation::UniformRandomCompilation)
-    return uniformrandomcompilation.candidatepaths
+function getcandidatepathsnum(uniformrandomcompilation::UniformRandomCompilation)
+    return uniformrandomcompilation.candidatepathsnum
 end
 
 """
@@ -40,8 +40,8 @@ end
 """
 $(TYPEDSIGNATURES)
 """
-function UniformRandomCompilation(seed::Int, candidatepaths::Int)
-    return UniformRandomCompilation(seed, candidatepaths, MersenneTwister(seed))
+function UniformRandomCompilation(seed::Int, candidatepathsnum::Int)
+    return UniformRandomCompilation(seed, candidatepathsnum, MersenneTwister(seed))
 end
 
 "The keyword for [UniformRandomPolicy](@ref)"
@@ -74,129 +74,25 @@ end
 
 """
 $(TYPEDSIGNATURES)
-
-A template compilation function that can be extended
-
-Pass in the intent compilation algorithm `intentcompilationalgorithm`
-
-Give in the following hook functions:
-- `intradomainalgfun` is used as compilation algorithm for the intents handled internally. 
-It should return a `Symbol` as a return code. 
-Common return codes are found in `MINDFul.ReturnCodes`
-```
-intradomainalgfun(
-    ibnf::IBNFramework, 
-    idagnode::IntentDAGNode{<:ConnectivityIntent},
-    intentcompilationalgorithm::IntentCompilationAlgorithm
-) -> Symbol
-```
-
-- `prioritizesplitpathsfun` is called when optical reach is not enough to have a lightpath end-to-end to serve the intent.
-When this happens several paths are considered which they can be broken in two.
-Before we settle on a node as a split point, we need therefore to choose a path.
-This function should return a vector of indices with decreasing priority of which path  of `paths` should be chosen.
-```
-prioritizesplitpathsfun(
-    ibnf::IBNFramework,
-    idagnode::IntentDAGNode,
-    intentcompilationalgorithm::IntentCompilationAlgorithm,
-    paths::Vector{Vector{LocalNode}}) -> Vector{Int}
-) -> Vector{Int}
-```
-
-- `prioritizesplitnodesfun` is called when optical reach is not enough to have a lightpath end-to-end to serve the intent and a path to split was already selected.
-The node selected will break the intent into two pieces with the node standing in between.
-This function should return a vector of indices with decreasing priority of which node of `path` should be chosen.
-```
-prioritizesplitnodesfun(
-    ibnf::IBNFramework,
-    idagnode::IntentDAGNode,
-    intentcompilationalgorithm::IntentCompilationAlgorithm,
-    path::Vector{LocalNode}) -> Vector{Int}
-) -> Vector{Int}
-```
-
-- `externaldomainalgkeyword` is called to select the border node to work as the source node for the delegated intent in a neighboring domain.
-The function should return the node in a global representation.
-```
-externaldomainalgkeyword(
-    ibnf::IBNFramework,
-    idagnode::IntentDAGNode{<:ConnectivityIntent},
-    intentcompilationalgorithm::IntentCompilationAlgorithm)
-) -> GlobalNode
-```
-"""
-function compileintenttemplate!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm; intradomainalgfun::F1, externaldomainalgkeyword::Symbol, prioritizesplitpathsfun::F2, prioritizesplitnodesfun::F3, prioritizesplitbordernodesfun::F4) where{F1<:Function, F2<:Function, F3<:Function, F4<:Function}
-    sourceglobalnode = getsourcenode(getintent(idagnode))
-    destinationglobalnode = getdestinationnode(getintent(idagnode))
-
-    returncode::Symbol = ReturnCodes.FAIL
-
-    if getibnfid(ibnf) == getibnfid(sourceglobalnode) == getibnfid(destinationglobalnode)
-        # intra-domain
-        returncode = intradomainalgfun(ibnf, idagnode, intentcompilationalgorithm)
-        if returncode === ReturnCodes.FAIL_OPTICALREACH_OPTINIT || returncode === ReturnCodes.FAIL_OPTICALREACH
-            # uncompile
-            @assert MINDF.uncompileintent!(ibnf, getidagnodeid(idagnode)) 
-            # find shortest distance neighbor j
-
-            # get a node in between the shortest paths
-            splitglobalnode = getsplitintentnode(ibnf, idagnode, intentcompilationalgorithm, prioritizesplitpathsfun, prioritizesplitnodesfun)
-            returncode = splitandcompileintradomainconnecivityintent!(ibnf, idagnode, intentcompilationalgorithm, intradomainalgfun, splitglobalnode)
-        end
-        updateidagnodestates!(ibnf, idagnode)
-    elseif getibnfid(ibnf) == getibnfid(sourceglobalnode) && getibnfid(ibnf) !== getibnfid(destinationglobalnode)
-        # source intra-domain , destination cross-domain
-        # border-node
-        if isbordernode(ibnf, destinationglobalnode)
-            #TODO-tomorrow
-            returncode = splitandcompilecrossdomainconnectivityintent(ibnf, idagnode, intentcompilationalgorithm, intradomainalgfun, externaldomainalgkeyword,  destinationglobalnode)
-        else
-            # select border node
-            destinationglobalbordernode = prioritizesplitbordernodesfun(ibnf, idagnode, intentcompilationalgorithm)
-
-            returncode = splitandcompilecrossdomainconnectivityintent(ibnf, idagnode, intentcompilationalgorithm, intradomainalgfun, externaldomainalgkeyword,  destinationglobalbordernode)
-        end
-    end
-    return returncode
-end
-
-"""
-$(TYPEDSIGNATURES)
 """
 function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation)
+    defaultintradomaincompalgorithm = intradomaincompilationtemplate()
     compileintenttemplate!(ibnf, idagnode, uniformrandomalg;
-        intradomainalgfun = uniformrandom!,
+        intradomainalgfun = defaultintradomaincompalgorithm,
         externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomalg),
-        prioritizesplitpathsfun = uniformrandomprioritizesplitpathsfun , 
-        prioritizesplitnodesfun = uniformrandomprioritizesplitnodesfun ,
-        prioritizesplitbordernodesfun = getsplitintentbordernode 
+        prioritizesplitpathsfun = uniformrandomprioritizesplitpathsfun, 
+        prioritizesplitnodesfun = uniformrandomprioritizesplitnodesfun,
+        prioritizesplitbordernodesfun = getrandomsplitintentbordernode 
         )
 end
 
+# this is a combination of random known border node and shortest distance unknown
 """
 $(TYPEDSIGNATURES)
-
-Splits connectivity intent on `splitglobalnode`
 """
-function splitandcompileintradomainconnecivityintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm,intradomainalgfun::F, splitglobalnode::GlobalNode) where {F}
-    intent = getintent(idagnode)
-    idag = getidag(ibnf)
-    firsthalfintent = ConnectivityIntent(sourceglobalnode, splitglobalnode, getrate(intent), getconstraints(intent))
-    firsthalfidagnode = addidagnode!(idag, firsthalfintent; parentid = getidagnodeid(idagnode), intentissuer = MachineGenerated())
-    returncode = intradomainalgfun(ibnf, firsthalfidagnode, intentcompilationalgorithm)
-    updateidagnodestates!(ibnf, firsthalfidagnode)
-    issuccess(returncode) || return returncode
-
-    secondhalfintent = ConnectivityIntent(splitglobalnode, destinationglobalnode, getrate(intent), filter(x -> !(x isa OpticalInitiateConstraint), getconstraints(intent)))
-    secondhalfidagnode = addidagnode!(idag, secondhalfintent; parentid = getidagnodeid(idagnode), intentissuer = MachineGenerated())
-    returncode = intradomainalgfun(ibnf, secondhalfidagnode, intentcompilationalgorithm)
-    updateidagnodestates!(ibnf, secondhalfidagnode)
-    return returncode
-end
-
-# this is a combination of random known border node and shortest distance unknown
-function getsplitintentbordernode(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm)
+function getrandomsplitintentbordernode(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm)
+    sourceglobalnode = getsourcenode(getintent(idagnode))
+    destinationglobalnode = getdestinationnode(getintent(idagnode))
     # randomly pick a border node
     # TODO-tomorrow
     dglobalbordernode = getfirst(shuffle(getrng(intentcompilationalgorithm), getbordernodesasglobal(ibnf))) do globalbordernode
@@ -217,37 +113,23 @@ end
 """
 $(TYPEDSIGNATURES)
 """
-function splitandcompilecrossdomainconnectivityintent(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm, intradomainalgfun::F1, externaldomainalgkeyword::Symbol, mediatorbordernode::GlobalNode) where {F1}
-    idag = getidag(ibnf)
-    intent = getintent(idagnode)
-    returncode::Symbol = ReturnCodes.FAIL
-
-    internalintent = ConnectivityIntent(getsourcenode(intent), mediatorbordernode, getrate(intent), vcat(getconstraints(intent), OpticalTerminateConstraint()))
-
-    internalidagnode = addidagnode!(idag, internalintent; parentid = getidagnodeid(idagnode), intentissuer = MachineGenerated())
-    returncode = intradomainalgfun(ibnf, internalidagnode, intentcompilationalgorithm)
-    updateidagnodestates!(ibnf, internalidagnode)
-
-    issuccess(returncode) || return returncode
-    
-    # need first to compile that to get the optical choice
-    opticalinitiateconstraint = getopticalinitiateconstraint(ibnf, getidagnodeid(internalidagnode))
-    externalintent = ConnectivityIntent(mediatorbordernode, getdestinationnode(intent), getrate(intent), vcat(getconstraints(intent), opticalinitiateconstraint))
-    externalidagnode = addidagnode!(idag, externalintent; parentid = getidagnodeid(idagnode), intentissuer = MachineGenerated())
-    remoteibnfid = getibnfid(getdestinationnode(intent))
-    internalremoteidagnode = remoteintent!(ibnf, externalidagnode, remoteibnfid)
-    # getintent brings in the internal RemoteIntent
-    externalremoteidagnodeid = getidagnodeid(getintent(internalremoteidagnode))
-
-    # compile internalremoteidagnode
-    remoteibnfhandler = getibnfhandler(ibnf, remoteibnfid)
-    # compilationaglorithmkeyword = MINDF.getcompilationalgorithmkeyword(intentcompilationalgorithm)
-    returncode = requestcompileintent_init!(ibnf, remoteibnfhandler, externalremoteidagnodeid, externaldomainalgkeyword, MINDF.getdefaultcompilationalgorithmargs(Val(externaldomainalgkeyword)))
-
-    # check state of current internalremoteidagnode
-    return returncode
+function uniformrandomprioritizesplitpathsfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, paths::Vector{Vector{LocalNode}})
+    return randperm(getrng(uniformrandomalg), length(paths))
 end
 
+"""
+$(TYPEDSIGNATURES)
+"""
+function uniformrandomprioritizesplitnodesfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, path::Vector{LocalNode})
+    return randperm(getrng(uniformrandomalg), length(path)-2)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Interfaces required:
+ - `getcandidatepathsnum -> Int`
+"""
 function uniformrandom!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation)
     # needed variables
     ibnag = getibnag(ibnf)
@@ -269,7 +151,7 @@ function uniformrandom!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:Connectivi
     if sourcelocalnode == destlocalnode
         yenstate = Graphs.YenState([u"0.0km"], [[destlocalnode]])
     else
-        yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, getweights(ibnag), getcandidatepaths(uniformrandomalg))
+        yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, getweights(ibnag), getcandidatepathsnum(uniformrandomalg))
     end
 
     lowlevelintentstoadd = LowLevelIntent[]
@@ -441,12 +323,10 @@ $(TYPEDSIGNATURES)
 
 Return the uniformly random available router port index and `nothing` if non available.
 """
-function getuniformrandomavailablerouterportindex(routerview::RouterView, rng::AbstractRNG)
+function prioritizerandomrouterports(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm, node::LocalNode)
+    routerview = getrouterview(getnodeview(getibnag(ibnf), node))
     reservedrouterports = getrouterportindex.(values(getreservations(routerview)))
-    for routerportindex in shuffle(rng, 1:getportnumber(routerview))
-        routerportindex ∉ reservedrouterports && return routerportindex
-    end
-    return nothing
+    return filter(x -> x ∉ reservedrouterports, shuffle(getrng(intentcompilationalgorithm), 1:getportnumber(routerview)))
 end
 
 """
@@ -526,49 +406,3 @@ function randomfit(boolvec::AbstractVector{Bool}, lengthrequire::Int)
     return nothing
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-return the indices of the yenstate
-prioritizesplitpathsfun(::IBNFramework, ::IntentDAGNode, ::IntentCompilationAlgorithm, ::Vector{Vector{LocalNode}}) -> Vector{Int}
-
-return the indices of the nodes
-prioritizesplitnodesfun(::IBNFramework, ::IntentDAGNode, ::IntentCompilationAlgorithm, ::Vector{LocalNode}) -> Vector{Int}
-
-Return the [`GlobalNode`](@ref) to break up the [`ConnectiityIntent`](@ref) into
-"""
-function getsplitintentnode(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm, prioritizesplitpathsfun::F1, prioritizesplitnodesfun::F2) where {F1<:Function, F2<:Function}
-    ibnag = getibnag(ibnf)
-    opticalinitiateconstraint = getfirst(x -> x isa OpticalInitiateConstraint, getconstraints(getintent(idagnode)))
-    @assert !isnothing(opticalinitiateconstraint)
-    opticalreach = getopticalreach(opticalinitiateconstraint)
-    sourceglobalnode = getsourcenode(getintent(idagnode))
-    sourcelocalnode = getlocalnode(ibnag, sourceglobalnode)
-    destinationglobalnode = getdestinationnode(getintent(idagnode))
-    destlocalnode = getlocalnode(ibnag, destinationglobalnode)
-    yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, getweights(ibnag), getcandidatepaths(uniformrandomalg))
-    # customize per yenstate priority order
-    yenidxs = prioritizesplitpathsfun(ibnf, idagnode, intentcompilationalgorithm, yenstate.paths)
-    # yenidxs = randperm(length(yenstate.dists))
-    for (dist, path) in zip(yenstate.dists[yenidxs], yenstate.paths[yenidxs])
-        # the accumulated distance from 2nd up to vorletzten node in path
-        # diststopathnodes = accumulate(+, getindex.([getweights(ibnag)], path[1:end-2], path[2:end-1]))
-        diststopathnodesidxs = prioritizesplitnodesfun(ibnf, idagnode, intentcompilationalgorithm, path)
-        # diststopathnodesidxs = randperm(length(diststopathnodes))
-        for nodeinpathidx in diststopathnodesidxs
-            if opticalreach > diststopathnodes[nodeinpathidx]
-                # +1 because we start measuring from the second node
-                return getglobalnode(ibnag, path[nodeinpathidx+1])
-            end
-        end
-    end
-    return nothing
-end
-
-function uniformrandomprioritizesplitpathsfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, paths::Vector{Vector{LocalNode}})
-    return randperm(getrng(uniformrandomalg), length(paths))
-end
-
-function uniformrandomprioritizesplitnodesfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, path::Vector{LocalNode})
-    return randperm(getrng(uniformrandomalg), length(path))
-end

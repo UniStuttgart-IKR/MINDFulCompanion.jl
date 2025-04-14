@@ -25,6 +25,6 @@ TM = Base.get_extension(MINDFul, :TestModule)
 @test !isnothing(TM)
 
 include("testsuite/uniformrandom.jl")
-# include("testsuite/uniformrandom_multidomain.jl")
+include("testsuite/uniformrandom_multidomain.jl")
 
 nothing

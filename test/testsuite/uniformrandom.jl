@@ -19,23 +19,23 @@
 
     RUNJET && @test_opt broken=true target_modules=[MINDF] function_filter=TM.JETfilteroutfunctions MINDF.compileintent!(ibnf1, MINDF.getidagnode(MINDF.getidag(ibnf1), intentuuid1), MINDF.KShorestPathFirstFitCompilation(10))
     @test MINDF.compileintent!(ibnf1, intentuuid1, MINDFC.UniformRandomCompilation(0, 5)) == ReturnCodes.SUCCESS
-    # TM.testcompilation(ibnf1, intentuuid1; withremote=false)
+    TM.testcompilation(ibnf1, intentuuid1; withremote=false)
 
-    # @test MINDF.installintent!(ibnf1, intentuuid1)
-    # TM.testinstallation(ibnf1, intentuuid1; withremote=false)
+    @test MINDF.installintent!(ibnf1, intentuuid1)
+    TM.testinstallation(ibnf1, intentuuid1; withremote=false)
 
-    # @test MINDF.uninstallintent!(ibnf1, intentuuid1)
-    # TM.testuninstallation(ibnf1, intentuuid1; withremote=false)
+    @test MINDF.uninstallintent!(ibnf1, intentuuid1)
+    TM.testuninstallation(ibnf1, intentuuid1; withremote=false)
 
-    # @test MINDF.uncompileintent!(ibnf1, UUID(1))
-    # TM.testuncompilation(ibnf1, intentuuid1)
-    # @test nv(MINDF.getidag(ibnf1)) == 1
+    @test MINDF.uncompileintent!(ibnf1, UUID(1))
+    TM.testuncompilation(ibnf1, intentuuid1)
+    @test nv(MINDF.getidag(ibnf1)) == 1
 
-    # TM.nothingisallocated(ibnf1)
+    TM.nothingisallocated(ibnf1)
 
-    # @test MINDF.removeintent!(ibnf1, intentuuid1)
-    # @test nv(MINDF.getidag(ibnf1)) == 0
+    @test MINDF.removeintent!(ibnf1, intentuuid1)
+    @test nv(MINDF.getidag(ibnf1)) == 0
 
-    # TM.testoxcfiberallocationconsistency(ibnf1)
+    TM.testoxcfiberallocationconsistency(ibnf1)
 
 end
