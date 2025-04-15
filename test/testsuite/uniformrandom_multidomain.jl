@@ -29,15 +29,15 @@ intentuuid_bordernode = MINDF.addintent!(ibnfs[1], conintent_bordernode, MINDF.N
 TM.testcompilation(ibnfs[1], intentuuid_bordernode; withremote=true)
  
 # install
-@test MINDF.installintent!(ibnfs[1], intentuuid_bordernode; verbose=true)
+@test MINDF.installintent!(ibnfs[1], intentuuid_bordernode; verbose=true) == ReturnCodes.SUCCESS
 TM.testinstallation(ibnfs[1], intentuuid_bordernode; withremote=true)
 
 # uninstall
-@test MINDF.uninstallintent!(ibnfs[1], intentuuid_bordernode; verbose=true)
+@test MINDF.uninstallintent!(ibnfs[1], intentuuid_bordernode; verbose=true) == ReturnCodes.SUCCESS
 TM.testuninstallation(ibnfs[1], intentuuid_bordernode; withremote=true)
 
 # uncompile
-@test MINDF.uncompileintent!(ibnfs[1], intentuuid_bordernode; verbose=true)
+@test MINDF.uncompileintent!(ibnfs[1], intentuuid_bordernode; verbose=true) == ReturnCodes.SUCCESS
 TM.testuncompilation(ibnfs[1], intentuuid_bordernode)
 @test nv(MINDF.getidag(ibnfs[1])) == 1
 @test nv(MINDF.getidag(ibnfs[3])) == 0
@@ -49,13 +49,13 @@ intentuuid_neigh = MINDF.addintent!(ibnfs[1], conintent_neigh, MINDF.NetworkOper
 @test MINDF.compileintent!(ibnfs[1], intentuuid_neigh, MINDFC.UniformRandomCompilation(0, 5)) == ReturnCodes.SUCCESS
 TM.testcompilation(ibnfs[1], intentuuid_neigh; withremote=true)
 
-@test MINDF.installintent!(ibnfs[1], intentuuid_neigh; verbose=true)
+@test MINDF.installintent!(ibnfs[1], intentuuid_neigh; verbose=true) == ReturnCodes.SUCCESS
 TM.testinstallation(ibnfs[1], intentuuid_neigh; withremote=true)
 
-@test MINDF.uninstallintent!(ibnfs[1], intentuuid_neigh; verbose=true)
+@test MINDF.uninstallintent!(ibnfs[1], intentuuid_neigh; verbose=true) == ReturnCodes.SUCCESS
 TM.testuninstallation(ibnfs[1], intentuuid_neigh; withremote=true)
 
-@test MINDF.uncompileintent!(ibnfs[1], intentuuid_neigh; verbose=true)
+@test MINDF.uncompileintent!(ibnfs[1], intentuuid_neigh; verbose=true) == ReturnCodes.SUCCESS
 TM.testuncompilation(ibnfs[1], intentuuid_neigh)
 @test nv(MINDF.getidag(ibnfs[1])) == 2
 @test nv(MINDF.getidag(ibnfs[3])) == 0

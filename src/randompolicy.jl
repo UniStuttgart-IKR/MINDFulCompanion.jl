@@ -75,314 +75,137 @@ end
 """
 $(TYPEDSIGNATURES)
 """
-function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation)
-    defaultintradomaincompalgorithm = intradomaincompilationtemplate()
-    compileintenttemplate!(ibnf, idagnode, uniformrandomalg;
-        intradomainalgfun = defaultintradomaincompalgorithm,
-        externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomalg),
-        prioritizesplitpathsfun = uniformrandomprioritizesplitpathsfun, 
-        prioritizesplitnodesfun = uniformrandomprioritizesplitnodesfun,
-        prioritizesplitbordernodesfun = getrandomsplitintentbordernode 
+function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
+    intradomaincompalgorithm = MINDF.intradomaincompilationtemplate(
+        prioritizepaths = prioritizepaths_random,
+        prioritizerouterport = MINDF.prioritizerouterports_first,
+        prioritizetransmdlandmode = prioritizetransmdlmode_random,
+        choosespectrum = choosespectrum_randomfit,
+        chooseoxcadddropport = MINDF.chooseoxcadddropport_first,
+    )
+    MINDF.compileintenttemplate!(ibnf, idagnode, uniformrandomcomp;
+        intradomainalgfun = intradomaincompalgorithm,
+        externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomcomp),
+        prioritizesplitnodes = prioritizesplitnodes_random,
+        prioritizesplitbordernodes = prioritizesplitbordernodes_random 
         )
 end
 
-# this is a combination of random known border node and shortest distance unknown
-"""
-$(TYPEDSIGNATURES)
-"""
-function getrandomsplitintentbordernode(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm)
-    sourceglobalnode = getsourcenode(getintent(idagnode))
-    destinationglobalnode = getdestinationnode(getintent(idagnode))
-    # randomly pick a border node
-    # TODO-tomorrow
-    dglobalbordernode = getfirst(shuffle(getrng(intentcompilationalgorithm), getbordernodesasglobal(ibnf))) do globalbordernode
-        getibnfid(globalbordernode) == getibnfid(destinationglobalnode)
-    end
-    # if unknown domain give it shortest distance border node
-    if isnothing(dglobalbordernode)
-        sourcelocalnode = getlocalnode(ibnf, sourceglobalnode)
-        borderlocals = getbordernodesaslocal(ibnf);
-        hopdists = Graphs.dijkstra_shortest_paths(getibnag(ibnf), sourcelocalnode).dists
-        borderlocalminidx = argmin(hopdists[borderlocals])
-        return getglobalnode(ibnf, borderlocals[borderlocalminidx])
-    else
-        return dglobalbordernode
-    return end
-end
-
-"""
-$(TYPEDSIGNATURES)
-"""
-function uniformrandomprioritizesplitpathsfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, paths::Vector{Vector{LocalNode}})
-    return randperm(getrng(uniformrandomalg), length(paths))
-end
-
-"""
-$(TYPEDSIGNATURES)
-"""
-function uniformrandomprioritizesplitnodesfun(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation, path::Vector{LocalNode})
-    return randperm(getrng(uniformrandomalg), length(path)-2)
-end
-
 """
 $(TYPEDSIGNATURES)
 
-Interfaces required:
- - `getcandidatepathsnum -> Int`
+Return the a random [`GlobalNode`](@ref) contained in a random path.
+The [`GlobalNode`](@ref) is used to break up the [`ConnectiityIntent`](@ref) into two.
+Not several candidates are returned but only a single choice.
 """
-function uniformrandom!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomalg::UniformRandomCompilation)
-    # needed variables
+function prioritizesplitnodes_random(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
     ibnag = getibnag(ibnf)
-    idag = getidag(ibnf)
-    idagnodeid = getidagnodeid(idagnode)
-    intent = getintent(idagnode)
-    sourceglobalnode = getsourcenode(intent)
+    opticalinitiateconstraint = getfirst(x -> x isa OpticalInitiateConstraint, getconstraints(getintent(idagnode)))
+    @assert !isnothing(opticalinitiateconstraint)
+    opticalreach = getopticalreach(opticalinitiateconstraint)
+    sourceglobalnode = getsourcenode(getintent(idagnode))
     sourcelocalnode = getlocalnode(ibnag, sourceglobalnode)
-    sourcenodeview = getnodeview(ibnag, sourcelocalnode)
-    destinationglobalnode = getdestinationnode(intent)
+    destinationglobalnode = getdestinationnode(getintent(idagnode))
     destlocalnode = getlocalnode(ibnag, destinationglobalnode)
-    destnodeview = getnodeview(ibnag, destlocalnode)
-    demandrate = getrate(intent)
-    constraints = getconstraints(intent)
+    yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, getweights(ibnag), getcandidatepathsnum(intentcompilationalgorithm))
+    # customize per yenstate priority order
+    yenidxs = randperm(getrng(uniformrandomcomp), length(yenstate.paths))
+    for (dist, path) in zip(yenstate.dists[yenidxs], yenstate.paths[yenidxs])
+        # the accumulated distance from 2nd up to vorletzten node in path
+        diststopathnodes = accumulate(+, getindex.([getweights(ibnag)], path[1:end-2], path[2:end-1]))
+        nodeidxs = ramdperm(getrng(uniformrandomcomp), length(diststopathnodes))
+        for nodeinpathidx in nodeidxs
+            if opticalreach > diststopathnodes[nodeinpathidx]
+                # +1 because we start measuring from the second node
+                return [getglobalnode(ibnag, path[nodeinpathidx+1])]
+            end
+        end
+    end
+    return nothing
+end
 
-    returncode::Symbol = ReturnCodes.FAIL
-    # start algorthim
-    ## work around Graphs.jl bug
+"""
+$(TYPEDSIGNATURES)
+Return a single choice of a random border node [`GlobalNode`](@ref) and not several candidates.
+"""
+function prioritizesplitbordernodes_random(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
+    ibnag = getibnag(ibnf)
+    sourceglobalnode = getsourcenode(getintent(idagnode))
+    sourcelocalnode = getlocalnode(ibnag, sourceglobalnode)
+    destinationglobalnode = getdestinationnode(getintent(idagnode))
+    borderlocals = getbordernodesaslocal(ibnf);
+    # pick closest border node
+
+    borderlocalsofdestdomain = filter(localnode -> getibnfid(getglobalnode(ibnag, localnode)) == getibnfid(destinationglobalnode), borderlocals)
+    if !isempty(borderlocalsofdestdomain)
+        # known domain
+        randlocalnode = rand(getrng(uniformrandomcomp), borderlocalsofdestdomain)
+        return [getglobalnode(ibnag, randlocalnode)]
+    else
+        # if unknown domain give it shortest distance border node
+        borderlocalsofsrcdomain = filter(localnode -> getibnfid(getglobalnode(ibnag, localnode)) == getibnfid(sourceglobalnode), borderlocals)
+        randlocalnode = rand(getrng(uniformrandomcomp), borderlocalsofsrcdomain)
+        return [getglobalnode(ibnag, randlocalnode)]
+    end
+end
+
+"""
+$(TYPEDSIGNATURES)
+"""
+function prioritizepaths_random(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
+    ibnag = getibnag(ibnf)
+    distweights = getweights(ibnag)
+    sourcelocalnode = getlocalnode(ibnag, getsourcenode(getintent(idagnode)))
+    destlocalnode = getlocalnode(ibnag, getdestinationnode(getintent(idagnode)))
     if sourcelocalnode == destlocalnode
         yenstate = Graphs.YenState([u"0.0km"], [[destlocalnode]])
     else
-        yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, getweights(ibnag), getcandidatepathsnum(uniformrandomalg))
+        yenstate = Graphs.yen_k_shortest_paths(ibnag, sourcelocalnode, destlocalnode, distweights, getcandidatepathsnum(uniformrandomcomp))
     end
+    return shuffle(getrng(uniformrandomcomp), yenstate.paths)
+end
 
-    lowlevelintentstoadd = LowLevelIntent[]
-    ## define a TransmissionModuleCompatibility for the destination node
-    transmissionmodulecompat = nothing
-    opticalinitiateconstraint = getfirst(x -> x isa OpticalInitiateConstraint, constraints)
-    if !isnothing(opticalinitiateconstraint)
-        # find router port 
-        yenidxs = randperm(length(yenstate.dists))
-        for (dist, path) in zip(yenstate.dists[yenidxs], yenstate.paths[yenidxs])
-            # find transmission module and mode
-            spectrumslotsrange = getspectrumslotsrange(opticalinitiateconstraint)
-            if length(path) > 1
-                if getopticalreach(opticalinitiateconstraint) < dist
-                    returncode = ReturnCodes.FAIL_OPTICALREACH_OPTINIT
-                    continue
+
+"""
+$(TYPEDSIGNATURES)
+
+Return the random available indices.
+If non is find return `nothing`.
+"""
+function prioritizetransmdlmode_random(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation, node::LocalNode, path::Union{Nothing, Vector{LocalNode}}, transmdlcompat::Union{Nothing, TransmissionModuleCompatibility}=nothing)
+    nodeview = getnodeview(getibnag(ibnf), node)
+    demandrate = getrate(getintent(idagnode))
+    availtransmdlidxs = getavailabletransmissionmoduleviewindex(nodeview)
+    transmissionmoduleviewpool = gettransmissionmoduleviewpool(nodeview)
+    returnpriorities = Tuple{Int,Int}[]
+    transmdlperm = randperm(getrng(uniformrandomcomp), length(transmissionmoduleviewpool))
+    filter!(i -> i ∈ availtransmdlidxs, transmdlperm)
+    for transmdlidx in transmdlperm
+        transmissionmodule = transmissionmoduleviewpool[transmdlidx]
+        transmodes = gettransmissionmodes(transmissionmodule)
+        transmodeidxs = randperm(getrng(uniformrandomcomp), length(transmodes))
+        for transmodeidx in transmodeidxs
+            transmode = transmodes[transmodeidx]
+            if !isnothing(path) && isnothing(transmdlcompat)
+                if getopticalreach(transmode) >= MINDF.getpathdistance(getibnag(ibnf), path) && getrate(transmode) >= demandrate
+                    push!(returnpriorities, (transmdlidx, transmodeidx))
                 end
-                pathspectrumavailability = getpathspectrumavailabilities(ibnf, path)
-                if !all(pathspectrumavailability[spectrumslotsrange])
-                    returncode = ReturnCodes.FAIL_SPECTRUM
-                    continue
-                end
-            end
-
-            transmissionmodulecompat = gettransmissionmodulecompat(opticalinitiateconstraint)
-            sourceadddropport = nothing
-            opticalinitincomingnode = something(getlocalnode(ibnag, getglobalnode_input(opticalinitiateconstraint)))
-
-            oxcadddropbypassspectrumllis = generatelightpathoxcadddropbypassspectrumlli(path, spectrumslotsrange; sourceadddropport, opticalinitincomingnode, destadddropport = nothing)
-            foreach(oxcadddropbypassspectrumllis) do lli
-                push!(lowlevelintentstoadd, lli)
-            end
-            
-            # successful source-path configuration
-            opticalterminateconstraint = getfirst(x -> x isa OpticalTerminateConstraint, constraints)
-            if !isnothing(opticalterminateconstraint)
-                # no need to do something more. add intents and return true
-                foreach(lowlevelintentstoadd) do lli
-                    addidagnode!(idag, lli; parentid = idagnodeid, intentissuer = MachineGenerated())
-                end
-                return ReturnCodes.SUCCESS
-            else
-                opticalincomingnode = length(path) == 1 ? opticalinitincomingnode : path[end-1]
-                return uniformrandomintradomain_destination!(ibnf, idagnode, lowlevelintentstoadd, transmissionmodulecompat, opticalincomingnode, spectrumslotsrange, uniformrandomalg)
-            end
-        end
-    else
-        sourcerouterindex = getuniformrandomavailablerouterportindex(getrouterview(sourcenodeview), getrng(uniformrandomalg))
-        if isnothing(sourcerouterindex)
-            return ReturnCodes.FAIL_SRCROUTERPORT
-        end
-        sourcerouterportlli = RouterPortLLI(sourcelocalnode, sourcerouterindex)
-        push!(lowlevelintentstoadd, sourcerouterportlli)
-
-        for (dist, path) in zip(yenstate.dists, yenstate.paths)
-            # find transmission module and mode
-            sourceavailtransmdlidxs = getavailabletransmissionmoduleviewindex(sourcenodeview)
-            sourcetransmissionmoduleviewpool = gettransmissionmoduleviewpool(sourcenodeview)
-            for sourcetransmdlidx in sourceavailtransmdlidxs
-                sourcetransmissionmodule = sourcetransmissionmoduleviewpool[sourcetransmdlidx]
-                sourcetransmissiomodeidx = getuniformrandomtransmissionmode(sourcetransmissionmodule, demandrate, dist, getrng(uniformrandomalg))
-
-                if isnothing(sourcetransmissiomodeidx)
-                    returncode = ReturnCodes.FAIL_SRCTRANSMDL
-                    continue
-                end
-                sourcetransmissionmode = gettransmissionmode(sourcetransmissionmodule, sourcetransmissiomodeidx)
-                demandslotsneeded = getspectrumslotsneeded(sourcetransmissionmode)
-                transmissionmoderate = getrate(sourcetransmissionmode)
-                transmissionmodulename = getname(sourcetransmissionmodule)
-
-                transmissionmodulecompat = TransmissionModuleCompatibility(transmissionmoderate, demandslotsneeded, transmissionmodulename)
-
-                # find oxc configuration
-                pathspectrumavailability = getpathspectrumavailabilities(ibnf, path)
-                startingslot = randomfit(pathspectrumavailability, demandslotsneeded)
-                if isnothing(startingslot)
-                    returncode = ReturnCodes.Fail_SPECTRUM
-                    continue
-                end
-
-                # are there oxc ports in the source ?
-                sourceadddropport = getuniformrandomavailableoxcadddropport(sourcenodeview, getrng(uniformrandomalg))
-                if isnothing(sourceadddropport)
-                    returncode = ReturnCodes.FAIL_SRCOXCADDDROPPORT
-                    continue
-                end
-
-                sourcetransmissionmodulelli = TransmissionModuleLLI(sourcelocalnode, sourcetransmdlidx, sourcetransmissiomodeidx, sourcerouterindex, sourceadddropport)
-                push!(lowlevelintentstoadd, sourcetransmissionmodulelli)
-
-                opticalinitincomingnode = nothing
-                spectrumslotsrange = startingslot:(startingslot + demandslotsneeded - 1)
-                oxcadddropbypassspectrumllis = generatelightpathoxcadddropbypassspectrumlli(path, spectrumslotsrange; sourceadddropport, opticalinitincomingnode, destadddropport = nothing)
-
-                foreach(oxcadddropbypassspectrumllis) do lli
-                    push!(lowlevelintentstoadd, lli)
-                end
-    
-                # successful source-path configuration
-                opticalterminateconstraint = getfirst(x -> x isa OpticalTerminateConstraint, constraints)
-                if !isnothing(opticalterminateconstraint)
-                    # no need to do something more. add intents and return true
-                    foreach(lowlevelintentstoadd) do lli
-                        addidagnode!(idag, lli; parentid = idagnodeid, intentissuer = MachineGenerated())
-                    end
-                    return ReturnCodes.SUCCESS
-                else
-                    # need to allocate a router port, a transmission module and mode, and an OXC configuration
-                    opticalincomingnode = path[end-1]
-                    return uniformrandomintradomain_destination!(ibnf, idagnode, lowlevelintentstoadd, transmissionmodulecompat, opticalincomingnode, spectrumslotsrange, uniformrandomalg)
+            elseif isnothing(path) && !isnothing(transmdlcompat)
+                if istransmissionmoduleandmodecompatible(transmissionmodule, transmodeidx, transmdlcompat)
+                    push!(returnpriorities, (transmdlidx, transmodeidx))
                 end
             end
         end
     end
-    return returncode
-end
-
-"""
-$(TYPEDSIGNATURES)
-    Takes care of the final node (destination) for the case of no `OpticalTerminateConstraint`
-"""
-function uniformrandomintradomain_destination!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, lowlevelintentstoadd, transmissionmodulecompat, opticalincomingnode::Int, spectrumslotsrange::UnitRange{Int}, uniformrandomalg::UniformRandomCompilation)
-    ibnag = getibnag(ibnf)
-    idag = getidag(ibnf)
-    idagnodeid = getidagnodeid(idagnode)
-    intent = getintent(idagnode)
-    destinationglobalnode = getdestinationnode(intent)
-    destlocalnode = getlocalnode(destinationglobalnode)
-    destnodeview = getnodeview(ibnag, destlocalnode)
-
-    # need to allocate a router port and a transmission module and mode
-    destrouterindex = getuniformrandomavailablerouterportindex(getrouterview(destnodeview), getrng(uniformrandomalg))
-    !isnothing(destrouterindex) || return ReturnCodes.FAIL_DSTROUTERPORT
-    destrouterportlli = RouterPortLLI(destlocalnode, destrouterindex)
-    push!(lowlevelintentstoadd, destrouterportlli)
-
-    destavailtransmdlidxs = getavailabletransmissionmoduleviewindex(destnodeview)
-    desttransmissionmoduleviewpool = gettransmissionmoduleviewpool(destnodeview)
-    destavailtransmdlmodeidx = getuniformrandomcompatibletransmoduleidxandmodeidx(desttransmissionmoduleviewpool, destavailtransmdlidxs, transmissionmodulecompat, getrng(uniformrandomalg))
-    !isnothing(destavailtransmdlmodeidx) || return ReturnCodes.FAIL_DSTTRANSMDL
-    destavailtransmdlidx, desttransmodeidx = destavailtransmdlmodeidx[1], destavailtransmdlmodeidx[2] 
-
-    # allocate OXC configuration
-    destadddropport = getuniformrandomavailableoxcadddropport(destnodeview, getrng(uniformrandomalg))
-    !isnothing(destadddropport) || return ReturnCodes.FAIL_DSTOXCADDDROPPORT
-    oxclli = OXCAddDropBypassSpectrumLLI(destlocalnode, opticalincomingnode, destadddropport, 0, spectrumslotsrange)
-    push!(lowlevelintentstoadd, oxclli)
-
-    desttransmissionmodulelli = TransmissionModuleLLI(destlocalnode, destavailtransmdlidx, desttransmodeidx, destrouterindex, destadddropport)
-    push!(lowlevelintentstoadd, desttransmissionmodulelli)
-
-    foreach(lowlevelintentstoadd) do lli
-        addidagnode!(idag, lli; parentid = idagnodeid, intentissuer = MachineGenerated())
-    end
-    return ReturnCodes.SUCCESS
-end
-
-
-"""
-$(TYPEDSIGNATURES)
-"""
-function getuniformrandomavailablerouterportindex(nodeview::NodeView, rng::AbstractRNG)
-    return getuniformrandomavailablerouterportindex(getrouterview(nodeview), rng)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Return the uniformly random available router port index and `nothing` if non available.
-"""
-function prioritizerandomrouterports(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm, node::LocalNode)
-    routerview = getrouterview(getnodeview(getibnag(ibnf), node))
-    reservedrouterports = getrouterportindex.(values(getreservations(routerview)))
-    return filter(x -> x ∉ reservedrouterports, shuffle(getrng(intentcompilationalgorithm), 1:getportnumber(routerview)))
+    return returnpriorities
 end
 
 """
 $(TYPEDSIGNATURES)
 """
-function getuniformrandomavailableoxcadddropport(nodeview::NodeView, rng::AbstractRNG)
-    return getuniformrandomavailableoxcadddropport(getoxcview(nodeview), rng)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Return the uniformly random available oxc add/drop port and `nothing` if none found
-"""
-function getuniformrandomavailableoxcadddropport(oxcview::OXCView, rng::AbstractRNG)
-    reservedoxcadddropports = getadddropport.(values(getreservations(oxcview)))
-    for adddropport in shuffle(1:getadddropportnumber(oxcview))
-        adddropport ∉ reservedoxcadddropports && return adddropport
-    end
-    return nothing
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Return a integer tuple `(Int, Int)` denoting a uniformly randomly available and compatible transmission module index and its transmission mode index.
-If non found return `nothing`.
-"""
-function getuniformrandomcompatibletransmoduleidxandmodeidx(transmissionmoduleviewpool::Vector{<:TransmissionModuleView}, availtransmdlidxs::Vector{Int}, transmissionmodulecompat::TransmissionModuleCompatibility, rng::AbstractRNG)
-    for availtransmdlidx in shuffle(rng, availtransmdlidxs)
-        transmissionmoduleview = transmissionmoduleviewpool[availtransmdlidx] 
-        transmissionmodes = gettransmissionmodes(transmissionmoduleview)
-        for transmodeidx in shuffle(rng, eachindex(transmissionmodes))
-            if istransmissionmoduleandmodecompatible(transmissionmoduleview, transmodeidx, transmissionmodulecompat)
-                return (availtransmdlidx, transmodeidx)
-            end
-        end
-    end
-    return nothing
-end
-
-
-"""
-$(TYPEDSIGNATURES)
-
-Return the index of a transmision mode that is uniform randomly selected with GBPS rate that can get deployed for the given demand rate and distance.
-If non is found return `nothing`.
-"""
-function getuniformrandomtransmissionmode(transmissionmoduleview::TransmissionModuleView, demandrate::GBPSf, demanddistance::KMf, rng::AbstractRNG)
-    transmodes = gettransmissionmodes(transmissionmoduleview)
-    sps = randperm(rng, length(transmodes))
-    for sp in sps
-        transmode = transmodes[sp]
-        getopticalreach(transmode) >= demanddistance && getrate(transmode) >= demandrate && return sp
-    end
-    return nothing
+function choosespectrum_randomfit(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, intentcompilationalgorithm::IntentCompilationAlgorithm, path::Vector{LocalNode}, demandslotsneeded::Int)
+    pathspectrumavailability = getpathspectrumavailabilities(ibnf, path)
+    return randomfit(pathspectrumavailability, demandslotsneeded)
 end
 
 
