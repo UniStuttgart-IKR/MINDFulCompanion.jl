@@ -75,7 +75,7 @@ end
 """
 $(TYPEDSIGNATURES)
 """
-function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
+@recvtime function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation)
     intradomaincompalgorithm = MINDF.intradomaincompilationtemplate(
         prioritizepaths = prioritizepaths_random,
         prioritizerouterport = MINDF.prioritizerouterports_first,
@@ -87,9 +87,49 @@ function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:Conn
         intradomainalgfun = intradomaincompalgorithm,
         externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomcomp),
         prioritizesplitnodes = prioritizesplitnodes_random,
-        prioritizesplitbordernodes = prioritizesplitbordernodes_random 
+        prioritizesplitbordernodes = prioritizesplitbordernodes_random,
+        @passtime
         )
 end
+
+# funcquote = quote 
+# function MINDF.compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation; offsettime::Union{DateTime, Nothing} = now())
+#     entrytime = now()
+#     intradomaincompalgorithm = MINDF.intradomaincompilationtemplate(
+#         prioritizepaths = prioritizepaths_random,
+#         prioritizerouterport = MINDF.prioritizerouterports_first,
+#         prioritizetransmdlandmode = prioritizetransmdlmode_random,
+#         choosespectrum = choosespectrum_randomfit,
+#         chooseoxcadddropport = MINDF.chooseoxcadddropport_first,
+#     )
+#     MINDF.compileintenttemplate!(ibnf, idagnode, uniformrandomcomp;
+#         intradomainalgfun = intradomaincompalgorithm,
+#         externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomcomp),
+#         prioritizesplitnodes = prioritizesplitnodes_random,
+#         prioritizesplitbordernodes = prioritizesplitbordernodes_random,
+#         @passtime
+#         )
+# end
+# end
+
+# funcquote0 = quote 
+# function compileintent!(ibnf::IBNFramework, idagnode::IntentDAGNode{<:ConnectivityIntent}, uniformrandomcomp::UniformRandomCompilation;)
+#     intradomaincompalgorithm = MINDF.intradomaincompilationtemplate(
+#         prioritizepaths = prioritizepaths_random,
+#         prioritizerouterport = MINDF.prioritizerouterports_first,
+#         prioritizetransmdlandmode = prioritizetransmdlmode_random,
+#         choosespectrum = choosespectrum_randomfit,
+#         chooseoxcadddropport = MINDF.chooseoxcadddropport_first,
+#     )
+#     MINDF.compileintenttemplate!(ibnf, idagnode, uniformrandomcomp;
+#         intradomainalgfun = intradomaincompalgorithm,
+#         externaldomainalgkeyword = MINDF.getcompilationalgorithmkeyword(uniformrandomcomp),
+#         prioritizesplitnodes = prioritizesplitnodes_random,
+#         prioritizesplitbordernodes = prioritizesplitbordernodes_random,
+#         @passtime
+#         )
+# end
+# end
 
 """
 $(TYPEDSIGNATURES)
